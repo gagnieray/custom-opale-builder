@@ -132,6 +132,9 @@ build_theme() {
       cp -r plugins ../../dist/"${FULL_PACKAGE_NAME}"
     fi
     cp -r webfonts stylesheets ../../dist/"${FULL_PACKAGE_NAME}"
+    if [ -d "../webfonts" ]; then
+      cp ../webfonts/* ../../dist/"${FULL_PACKAGE_NAME}"/webfonts
+    fi
     cp ../README.md ../../LICENSE ../../dist/"${FULL_PACKAGE_NAME}"
 
     # Restore Opale
