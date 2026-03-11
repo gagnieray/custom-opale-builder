@@ -1,0 +1,3 @@
+[submodule "src/opale"]
+	path = src/opale
+	url = https://github.com/gagnieray/opale.git

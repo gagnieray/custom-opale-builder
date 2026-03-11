@@ -1,0 +1,19 @@
+// Add you own sass variables.
+$purplemine: #614ba6;
+
+// Override the variables defined in `opale/src/sass/_variables.scss`
+// with the `!default` flag.
+@use 'variables' with (
+  $purple: $purplemine,
+  $brand-primary: $purplemine,
+  $use-logo: true,
+  $logo-image-width: 60px,
+  $logo-image-height: 40px
+);
+
+// Add any custom Sass style rules you want.
+.theme-Opale_customized {
+  #footer {
+    color: #707282;
+  }
+}
