@@ -142,6 +142,7 @@ build_theme() {
     if [ "${OPALE_BASE}" != "master" ] ; then
         git switch master
     fi
+    rm src/sass/_custom-variables.scss
     rm -rf node_modules
     echo -e "\n${COLOR_GREEN}Customized theme built successfully!${COLOR_RESET}"
 }
