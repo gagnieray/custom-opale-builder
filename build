@@ -18,7 +18,7 @@
 set -e
 
 # Initialize variables with default values
-OPALE_BASE="master"
+OPALE_BASE="default"
 INCLUDE_PLUGINS="no"
 PACKAGE_NAME="opale_customized"
 PACKAGE_VERSION=""
@@ -102,13 +102,18 @@ build_theme() {
     rm -rf dist/*/
     mkdir -p dist/"${FULL_PACKAGE_NAME}"
     cd src/opale
-    if [ "${OPALE_BASE}" != "master" ] ; then
+    if [ -f "../_custom-variables.scss" ]; then
+        cp ../_custom-variables.scss src/sass
+    else
+        echo -e "${COLOR_RED}File 'src/_custom-variables.scss' could not be found!${COLOR_RESET}"
+        exit 1
+    fi
+    if [ "${OPALE_BASE}" != "default" ] ; then
         git switch "${OPALE_BASE}"
     fi
     npm install --silent
 
-    # Add custom variables to application.scss
-    cp ../_custom-variables.scss src/sass
+    # Add _custom-variables.scss to application.scss
     if ! head -1 src/sass/application.scss | grep -q '^@use "custom-variables";'; then
         echo -e "Info: adding @use rule at the top of 'opale/src/sass/application.scss'"
         { echo '@use "custom-variables";'; cat src/sass/application.scss; } > temp && mv temp src/sass/application.scss
@@ -135,11 +140,14 @@ build_theme() {
     if [ -d "../webfonts" ]; then
       cp ../webfonts/* ../../dist/"${FULL_PACKAGE_NAME}"/webfonts
     fi
-    cp ../README.md ../../LICENSE ../../dist/"${FULL_PACKAGE_NAME}"
+    if [ -f "../README.md" ]; then
+      cp ../README.md ../../dist/"${FULL_PACKAGE_NAME}"
+    fi
+    cp ../../LICENSE ../../dist/"${FULL_PACKAGE_NAME}"
 
-    # Restore Opale
+    # Restore src/opale/ to default state
     git restore .
-    if [ "${OPALE_BASE}" != "master" ] ; then
+    if [ "${OPALE_BASE}" != "default" ] ; then
         git switch master
     fi
     rm src/sass/_custom-variables.scss
