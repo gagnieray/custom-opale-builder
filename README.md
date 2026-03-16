@@ -76,8 +76,8 @@ In order to do that :
    );
    ```
 
-   > [!CAUTION]
-     > If your logo's height is greater than 40px, you will have to adjust `$header-padding-vertical` default value which controls the header's minimal height.
+> [!CAUTION]
+> If your logo's height is greater than 40px, you will have to adjust `$header-padding-vertical` default value which controls the header's minimal height.
 
 If you don’t need a logo, simply delete the `src/images/` folder.
 
