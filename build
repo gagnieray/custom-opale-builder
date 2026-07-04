@@ -22,6 +22,7 @@ OPALE_BASE="default"
 INCLUDE_PLUGINS="no"
 PACKAGE_NAME="opale_customized"
 PACKAGE_VERSION=""
+OUTPUT_DIRECTORY="dist/"
 
 # Define color codes
 COLOR_RESET="\033[0m"
@@ -34,24 +35,26 @@ help() {
     echo -e "${COLOR_GREEN}Usage:${COLOR_RESET} ./$(basename "$0") [OPTIONS] <COMMAND>\n"
 
     echo -e "${COLOR_GREEN}Options:${COLOR_RESET}"
-    echo -e "  -b BASE     Opale base branch to use (default: master)"
-    echo -e "  -n NAME     Package name (default: opale_customized)"
-    echo -e "  -p yes/no   Include plugins stylesheets (default: no)"
-    echo -e "  -v VERSION  Package version (optional)"
-    echo -e "  -h          Display this help message\n"
+    echo -e "  -b BASE      Opale base branch to use (default: master)"
+    echo -e "  -n NAME      Package name (default: opale_customized)"
+    echo -e "  -o DIRECTORY Output directory (default: dist/)"
+    echo -e "  -p yes/no    Include plugins stylesheets (default: no)"
+    echo -e "  -v VERSION   Package version (optional)"
+    echo -e "  -h           Display this help message\n"
 
     echo -e "${COLOR_GREEN}Commands:${COLOR_RESET}"
-    echo -e "  package     Build and package the theme into a .tar.gz archive"
-    echo -e "  help        Display this help message\n"
+    echo -e "  package      Build and package the theme into a .tar.gz archive"
+    echo -e "  help         Display this help message\n"
 
     echo -e "${COLOR_GREEN}Examples:${COLOR_RESET}"
     echo -e "  ./$(basename "$0") -b redmine-5.x -p yes"
     echo -e "  ./$(basename "$0") -n my_theme -v 1.0.0 package"
-    echo -e "  ./$(basename "$0") -b redmine-6.x -n custom_theme -v 2.1.0 package\n"
+    echo -e "  ./$(basename "$0") -n custom_theme -o /var/www/redmine/themes\n"
 
     echo -e "${COLOR_GREEN}Notes:${COLOR_RESET}"
     echo -e "  - Options must be placed before the command"
     echo -e "  - Version is optional; if provided, it's appended to the package name"
+    echo -e "  - All files and folders that start with the package name will be deleted from the output directory"
     echo -e "  - The script must be run from the project root directory"
 }
 
@@ -62,10 +65,11 @@ if [[ "$1" == "-h" || "$1" == "help" ]]; then
 fi
 
 # Read options and corresponding values
-while getopts "b:n:p:v:h" option; do
+while getopts "b:n:o:p:v:h" option; do
     case "$option" in
         b) OPALE_BASE=${OPTARG};;
         n) PACKAGE_NAME=${OPTARG};;
+        o) OUTPUT_DIRECTORY=${OPTARG};;
         p) INCLUDE_PLUGINS=${OPTARG};;
         v) PACKAGE_VERSION=${OPTARG};;
         h) help; exit 0;;
@@ -78,9 +82,26 @@ shift $((OPTIND - 1))
 
 # Define full package name
 if [ -n "${PACKAGE_VERSION}" ]; then
-    FULL_PACKAGE_NAME=${PACKAGE_NAME}-${PACKAGE_VERSION}
+    FULL_PACKAGE_NAME="${PACKAGE_NAME}-${PACKAGE_VERSION}"
 else
-    FULL_PACKAGE_NAME=${PACKAGE_NAME}
+    FULL_PACKAGE_NAME="${PACKAGE_NAME}"
+fi
+
+# Define absolute output path
+CURRENT_DIR=$(pwd)
+CURRENT_DIR="${CURRENT_DIR%/}/"
+if [ "${OUTPUT_DIRECTORY}" != "dist/" ] ; then
+    OUTPUT_DIRECTORY="${OUTPUT_DIRECTORY%/}/"
+
+    if [[ "${OUTPUT_DIRECTORY}" == /* ]]; then
+        ABS_OUTPUT_PATH="${OUTPUT_DIRECTORY}"
+    elif [[ "${OUTPUT_DIRECTORY}" == ./* ]]; then
+        ABS_OUTPUT_PATH="${CURRENT_DIR}${OUTPUT_DIRECTORY:2}"
+    else
+        ABS_OUTPUT_PATH="${CURRENT_DIR}${OUTPUT_DIRECTORY}"
+    fi
+else
+    ABS_OUTPUT_PATH="${CURRENT_DIR}${OUTPUT_DIRECTORY}"
 fi
 
 # Function to build the customized theme
@@ -98,9 +119,9 @@ build_theme() {
     fi
 
     # Start build
-    echo -e "\n${COLOR_BLUE}Building customized theme based on Opale in the 'dist/' directory...${COLOR_RESET}\n"
-    rm -rf dist/*/
-    mkdir -p dist/"${FULL_PACKAGE_NAME}"
+    echo -e "\n${COLOR_BLUE}Building customized theme based on Opale...${COLOR_RESET}\n"
+    rm -rf "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"*
+    mkdir -p "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
     cd src/opale
     if [ -f "../_custom-variables.scss" ]; then
         cp ../_custom-variables.scss src/sass
@@ -121,29 +142,29 @@ build_theme() {
         echo -e "Info : @use rule already at the top of 'opale/src/sass/application.scss'"
     fi
 
-    # Build and copy in dist folder
+    # Build and copy in output directory
     npm run lint
     npm run build
     if [ -d "../favicon" ]; then
-      cp -r ../favicon ../../dist/"${FULL_PACKAGE_NAME}"
+      cp -r ../favicon "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
     fi
     if [ -d "../images" ]; then
-      cp -r ../images ../../dist/"${FULL_PACKAGE_NAME}"
+      cp -r ../images "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
     fi
     if [ -d "javascripts" ]; then
-      cp -r javascripts ../../dist/"${FULL_PACKAGE_NAME}"
+      cp -r javascripts "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
     fi
     if [ "${INCLUDE_PLUGINS}" == "yes" ]; then
-      cp -r plugins ../../dist/"${FULL_PACKAGE_NAME}"
+      cp -r plugins "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
     fi
-    cp -r webfonts stylesheets ../../dist/"${FULL_PACKAGE_NAME}"
+    cp -r webfonts stylesheets "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
     if [ -d "../webfonts" ]; then
-      cp ../webfonts/* ../../dist/"${FULL_PACKAGE_NAME}"/webfonts
+      cp ../webfonts/* "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"/webfonts
     fi
     if [ -f "../README.md" ]; then
-      cp ../README.md ../../dist/"${FULL_PACKAGE_NAME}"
+      cp ../README.md "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
     fi
-    cp ../../LICENSE ../../dist/"${FULL_PACKAGE_NAME}"
+    cp ../../LICENSE "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
 
     # Restore src/opale/ to default state
     git restore .
@@ -152,17 +173,17 @@ build_theme() {
     fi
     rm src/sass/_custom-variables.scss
     rm -rf node_modules
-    echo -e "\n${COLOR_GREEN}Customized theme built successfully!${COLOR_RESET}"
+    echo -e "\n${COLOR_GREEN}Customized theme built successfully in '${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}'!${COLOR_RESET}"
 }
 
 # Function to package the customized theme
 package_theme() {
     build_theme
-    echo -e "\n${COLOR_BLUE}Packaging customized theme based on Opale in the 'dist/' directory...${COLOR_RESET}\n"
-    cd ../../dist
+    echo -e "\n${COLOR_BLUE}Packaging customized theme based on Opale...${COLOR_RESET}\n"
+    cd "${ABS_OUTPUT_PATH}"
     tar cvfz "${FULL_PACKAGE_NAME}".tar.gz "${FULL_PACKAGE_NAME}"
     rm -rf "${FULL_PACKAGE_NAME}"
-    echo -e "\n${COLOR_GREEN}Customized theme packaged successfully!${COLOR_RESET}"
+    echo -e "\n${COLOR_GREEN}Customized theme packaged successfully in '${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}.tar.gz'!${COLOR_RESET}"
 }
 
 # Handle commands

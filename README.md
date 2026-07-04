@@ -35,9 +35,9 @@ Then, run the script from the project root directory:
 
 ```bash
 ./build
-``` 
+```
 
-The result will be available in the `dist/` folder created during the process, ready to be installed in your Redmine's `themes` folder.
+The result will be available in the output directory created during the process.
 
 > [!NOTE]
 > Have a look at the _[Help](#help)_ section below for a list of all the available options and commands.
@@ -48,24 +48,19 @@ The result will be available in the `dist/` folder created during the process, r
 > [!IMPORTANT]
 > Keep _Opale_ up to date running `git pull origin <branch>` from the `src/opale/` folder.
 
-> [!CAUTION]
-> If you customize the theme for _Redmine 5.x_, be sure to use the `-p redmine-5.x` option
-
 ### Favicon
 
 You can add a custom favicon simply by adding it in the `src/favicon/` folder. The file must be named `favicon.ico`.
 
-If you don't need a custom favicon, delete the `src/favicon/` folder.
-
 ### Logo
 
-You can add a logo to be displayed in the pages' header. 
+You can add a logo to be displayed in the pages' header.
 
 In order to do that :
 
 1. Add your logo in the `src/images/logo/` folder. The file must be named `logo.png`.
 2. Define the required variables in `src/_custom-variables.scss`.
-   
+
    ```scss
    @use 'variables' with (
      $use-logo: true,
@@ -79,32 +74,32 @@ In order to do that :
 > [!CAUTION]
 > If your logo's height is greater than 40px, you will have to adjust `$header-padding-vertical` default value which controls the header's minimal height.
 
-If you don’t need a logo, simply delete the `src/images/` folder.
-
 ## Help
 
 ```
 Usage: ./build [OPTIONS] <COMMAND>
 
 Options:
-  -b BASE     Opale base branch to use (default: master)
-  -n NAME     Package name (default: opale_customized)
-  -p yes/no   Include plugins stylesheets (default: no)
-  -v VERSION  Package version (optional)
-  -h          Display this help message
+  -b BASE      Opale base branch to use (default: master)
+  -n NAME      Package name (default: opale_customized)
+  -o DIRECTORY Output directory (default: dist/)
+  -p yes/no    Include plugins stylesheets (default: no)
+  -v VERSION   Package version (optional)
+  -h           Display this help message
 
 Commands:
-  package     Build and package the theme into a .tar.gz archive
-  help        Display this help message
+  package      Build and package the theme into a .tar.gz archive
+  help         Display this help message
 
 Examples:
   ./build -b redmine-5.x -p yes
   ./build -n my_theme -v 1.0.0 package
-  ./build -b redmine-6.x -n custom_theme -v 2.1.0 package
+  ./build -n custom_theme -o /var/www/redmine/themes
 
 Notes:
   - Options must be placed before the command
   - Version is optional; if provided, it's appended to the package name
+  - All files and folders that start with the package name will be deleted from the output directory
   - The script must be run from the project root directory
 ```
 
