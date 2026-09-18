@@ -18,7 +18,7 @@
 set -e
 
 # Initialize variables with default values
-OPALE_BASE="default"
+OPALE_BASE="master"
 INCLUDE_PLUGINS="no"
 PACKAGE_NAME="opale_customized"
 PACKAGE_VERSION=""
@@ -38,7 +38,7 @@ help() {
     echo -e "  -b BASE      Opale base branch to use (default: master)"
     echo -e "  -n NAME      Package name (default: opale_customized)"
     echo -e "  -o DIRECTORY Output directory (default: dist/)"
-    echo -e "  -p yes/no    Include plugins stylesheets (default: no)"
+    echo -e "  -p yes/no    Build plugins stylesheets (default: no)"
     echo -e "  -v VERSION   Package version (optional)"
     echo -e "  -h           Display this help message\n"
 
@@ -80,14 +80,14 @@ done
 # Remove processed options from arguments
 shift $((OPTIND - 1))
 
-# Define full package name
+# Define packages names
 if [ -n "${PACKAGE_VERSION}" ]; then
     FULL_PACKAGE_NAME="${PACKAGE_NAME}-${PACKAGE_VERSION}"
 else
     FULL_PACKAGE_NAME="${PACKAGE_NAME}"
 fi
 
-# Define absolute output path
+# Define absolute output path
 CURRENT_DIR=$(pwd)
 CURRENT_DIR="${CURRENT_DIR%/}/"
 if [ "${OUTPUT_DIRECTORY}" != "dist/" ] ; then
@@ -104,92 +104,291 @@ else
     ABS_OUTPUT_PATH="${CURRENT_DIR}${OUTPUT_DIRECTORY}"
 fi
 
-# Function to build the customized theme
-build_theme() {
-    # Check requirements
-    echo -e "${COLOR_BLUE}Checking npm version...${COLOR_RESET}"
-    if ! npm -v --silent; then
-        echo -e "${COLOR_RED}Install Node.js and npm!${COLOR_RESET}"
+# Function to extract minimum Node.js version from Opale's workflow file
+get_minimum_node_version() {
+    local workflow_file=".github/workflows/lint.yml"
+    local min_version=""
+
+    cd src/opale 2>/dev/null || return
+
+    min_version=$(git show "${OPALE_BASE}:${workflow_file}" 2>/dev/null | \
+        grep -oP 'node-version:\s*\[\s*\K[0-9]+' | head -1)
+
+    cd - > /dev/null
+
+    echo "${min_version}"
+}
+
+# Function to compare semantic versions (returns 0 if version >= min_version)
+version_gte() {
+    local version="$1"
+    local min_version="$2"
+
+    local major_version=$(echo "${version}" | grep -oP '^[0-9]+' | head -1)
+
+    if [ -z "${major_version}" ] || [ -z "${min_version}" ]; then
+        return 0
+    fi
+
+    [ "${major_version}" -ge "${min_version}" ]
+}
+
+# Function to check requirements
+check_requirements() {
+    echo -e "\n${COLOR_BLUE}Checking Node.js version...${COLOR_RESET}"
+    if ! command -v node &> /dev/null; then
+        echo -e "${COLOR_RED}Install Node.js!${COLOR_RESET}"
         exit 1
     fi
-    echo -e "\n${COLOR_BLUE}Checking git version...${COLOR_RESET}"
-    if ! git -v; then
-        echo -e "${COLOR_RED}Install git!${COLOR_RESET}"
+    local min_node_version=$(get_minimum_node_version)
+    local current_node_version=$(node -v | grep -oP 'v\K[0-9]+')
+    if ! version_gte "${current_node_version}" "${min_node_version}"; then
+        echo -e "${COLOR_RED}Update Node.js to the required minimum version (${min_node_version}.x)!${COLOR_RESET}"
         exit 1
     fi
 
-    # Start build
-    echo -e "\n${COLOR_BLUE}Building customized theme based on Opale...${COLOR_RESET}\n"
-    rm -rf "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"*
-    mkdir -p "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
+    echo -e "${COLOR_BLUE}Checking git...${COLOR_RESET}"
+    if ! git -v > /dev/null 2>&1; then
+        echo -e "${COLOR_RED}Install git!${COLOR_RESET}"
+        exit 1
+    fi
+}
+
+# Function to prepare opale submodule
+prepare_opale() {
+    echo -e "${COLOR_BLUE}Preparing Opale submodule...${COLOR_RESET}"
+
     cd src/opale
+
+    # Switch to the specified base branch if needed
+    if [ "${OPALE_BASE}" != "master" ]; then
+        echo -e "Switching to branch: ${OPALE_BASE}"
+        git switch "${OPALE_BASE}"
+        git pull
+    fi
+
+    # Copy custom variables
     if [ -f "../_custom-variables.scss" ]; then
         cp ../_custom-variables.scss src/sass
     else
         echo -e "${COLOR_RED}File 'src/_custom-variables.scss' could not be found!${COLOR_RESET}"
         exit 1
     fi
-    if [ "${OPALE_BASE}" != "default" ] ; then
-        git switch "${OPALE_BASE}"
-    fi
-    npm install --silent
 
     # Add _custom-variables.scss to application.scss
     if ! head -1 src/sass/application.scss | grep -q '^@use "custom-variables";'; then
         echo -e "Info: adding @use rule at the top of 'opale/src/sass/application.scss'"
         { echo '@use "custom-variables";'; cat src/sass/application.scss; } > temp && mv temp src/sass/application.scss
     else
-        echo -e "Info : @use rule already at the top of 'opale/src/sass/application.scss'"
+        echo -e "Info: @use rule already at the top of 'opale/src/sass/application.scss'"
     fi
 
-    # Build and copy in output directory
-    npm run lint
-    npm run build
-    if [ -d "../favicon" ]; then
-      cp -r ../favicon "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    fi
-    if [ -d "../images" ]; then
-      cp -r ../images "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    fi
-    if [ -d "javascripts" ]; then
-      cp -r javascripts "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    fi
-    if [ "${INCLUDE_PLUGINS}" == "yes" ]; then
-      cp -r plugins "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    fi
-    cp -r webfonts stylesheets "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    if [ -d "../webfonts" ]; then
-      cp ../webfonts/* "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"/webfonts
-    fi
-    if [ -f "../README.md" ]; then
-      cp ../README.md "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    fi
-    cp ../../LICENSE "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-
-    # Restore src/opale/ to default state
-    git restore .
-    if [ "${OPALE_BASE}" != "default" ] ; then
-        git switch master
-    fi
-    rm src/sass/_custom-variables.scss
-    rm -rf node_modules
-    echo -e "\n${COLOR_GREEN}Customized theme built successfully in '${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}'!${COLOR_RESET}"
+    npm install --silent
+    cd - > /dev/null
 }
 
-# Function to package the customized theme
+# Function to restore opale submodule to default state
+restore_opale() {
+    echo -e "${COLOR_BLUE}Restoring Opale submodule to default state...${COLOR_RESET}"
+
+    cd src/opale
+    git restore .
+
+    if [ "${OPALE_BASE}" != "master" ]; then
+        git switch master
+    fi
+
+    rm -f src/sass/_custom-variables.scss
+    rm -rf node_modules
+    rm -rf plugins
+    cd - > /dev/null
+}
+
+# Function to get all available plugins dynamically
+get_available_plugins() {
+    local plugins_dir="src/opale/plugins"
+    local plugins=()
+
+    if [ ! -d "${plugins_dir}" ]; then
+        return
+    fi
+
+    while IFS= read -r -d '' plugin_dir; do
+        local plugin_name=$(basename "${plugin_dir}")
+        plugins+=("${plugin_name}")
+    done < <(find "${plugins_dir}" -maxdepth 1 -type d ! -name 'plugins' -print0)
+
+    printf '%s\n' "${plugins[@]}"
+}
+
+# Function to build theme
+build_theme() {
+    check_requirements
+    echo -e "${COLOR_BLUE}Building customized theme based on Opale...${COLOR_RESET}"
+
+    rm -rf "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"*
+    mkdir -p "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
+
+    prepare_opale
+    cd src/opale
+    npm run lint
+
+    if [ "${OPALE_BASE}" == "redmine-5.x" ]; then
+        npm run build
+    else
+        npm run build:theme
+    fi
+
+    cd - > /dev/null
+
+    # Copy built assets to output directory
+    copy_theme_assets
+
+    restore_opale
+
+    echo -e "${COLOR_GREEN}Customized theme built successfully in '${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}'!${COLOR_RESET}"
+}
+
+# Function to build plugins
+build_plugins() {
+    local skip_restore="${1:-false}"
+
+    check_requirements
+    echo -e "${COLOR_BLUE}Building customized plugins based on Opale...${COLOR_RESET}"
+
+    prepare_opale
+    cd src/opale
+    npm run lint
+
+    if [ "${OPALE_BASE}" == "redmine-5.x" ]; then
+        npm run build
+    else
+        npm run build:plugins
+    fi
+
+    cd - > /dev/null
+
+    local available_plugins=($(get_available_plugins))
+
+    if [ ${#available_plugins[@]} -eq 0 ]; then
+        echo -e "${COLOR_RED}No plugins found in src/opale/plugins!${COLOR_RESET}"
+        return 1
+    fi
+
+    # Copy built plugins to output directory
+    for plugin_name in "${available_plugins[@]}"; do
+        copy_plugin_assets "${plugin_name}"
+    done
+
+    # Restore only if not skipping (i.e., when called without "package")
+    if [ "${skip_restore}" = "false" ]; then
+        restore_opale
+    fi
+
+    echo -e "${COLOR_GREEN}Customized plugins built successfully!${COLOR_RESET}"
+}
+
+# Function to copy theme assets
+copy_theme_assets() {
+    if [ -d "src/favicon" ]; then
+        cp -r src/favicon "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
+    fi
+    if [ -d "src/images" ]; then
+        cp -r src/images "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
+    fi
+    if [ -d "src/opale/javascripts" ]; then
+        cp -r src/opale/javascripts "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
+    fi
+    cp -r src/opale/webfonts src/opale/stylesheets "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
+    if [ -d "src/webfonts" ]; then
+        cp src/webfonts/* "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"/webfonts
+    fi
+    if [ -f "src/README.md" ]; then
+        cp src/README.md "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
+    fi
+    cp LICENSE "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
+}
+
+# Function to copy a single plugin assets
+copy_plugin_assets() {
+    local plugin_name="$1"
+    local plugin_output_dir="${ABS_OUTPUT_PATH}${PACKAGE_NAME}-${plugin_name}"
+
+    if [ -n "${PACKAGE_VERSION}" ]; then
+        plugin_output_dir="${ABS_OUTPUT_PATH}${PACKAGE_NAME}-${plugin_name}-${PACKAGE_VERSION}"
+    fi
+
+    # Clean up previous builds
+    rm -rf "${plugin_output_dir}"*
+    mkdir -p "${plugin_output_dir}"
+
+    # Copy plugin assets
+    if [ -d "src/opale/plugins/${plugin_name}" ]; then
+        cp -r src/opale/plugins/"${plugin_name}"/* "${plugin_output_dir}"
+    fi
+
+    # Copy license
+    cp LICENSE "${plugin_output_dir}"
+}
+
+# Function to package theme
 package_theme() {
     build_theme
-    echo -e "\n${COLOR_BLUE}Packaging customized theme based on Opale...${COLOR_RESET}\n"
+    echo -e "${COLOR_BLUE}Packaging customized theme...${COLOR_RESET}"
     cd "${ABS_OUTPUT_PATH}"
     tar cvfz "${FULL_PACKAGE_NAME}".tar.gz "${FULL_PACKAGE_NAME}"
     rm -rf "${FULL_PACKAGE_NAME}"
-    echo -e "\n${COLOR_GREEN}Customized theme packaged successfully in '${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}.tar.gz'!${COLOR_RESET}"
+    cd "${CURRENT_DIR}"
+    echo -e "${COLOR_GREEN}Customized theme packaged successfully: '${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}.tar.gz'!${COLOR_RESET}"
+}
+
+# Function to package plugins
+package_plugins() {
+    build_plugins "true" || return 1
+    echo -e "${COLOR_BLUE}Packaging customized plugins...${COLOR_RESET}"
+
+    local available_plugins=($(get_available_plugins))
+
+    for plugin_name in "${available_plugins[@]}"; do
+        local plugin_package_name="${PACKAGE_NAME}-${plugin_name}"
+        if [ -n "${PACKAGE_VERSION}" ]; then
+            plugin_package_name="${PACKAGE_NAME}-${plugin_name}-${PACKAGE_VERSION}"
+        fi
+
+        if [ -d "${ABS_OUTPUT_PATH}${plugin_package_name}" ]; then
+            cd "${ABS_OUTPUT_PATH}"
+            tar cvfz "${plugin_package_name}".tar.gz "${plugin_package_name}"
+            rm -rf "${plugin_package_name}"
+            cd "${CURRENT_DIR}"
+            echo -e "${COLOR_GREEN}Plugin '${plugin_name}' packaged: '${ABS_OUTPUT_PATH}${plugin_package_name}.tar.gz'${COLOR_RESET}"
+        else
+            echo -e "${COLOR_RED}WARNING: Directory not found: ${ABS_OUTPUT_PATH}${plugin_package_name}${COLOR_RESET}"
+        fi
+    done
+
+    restore_opale
+}
+
+# Function to build everything
+build() {
+    build_theme
+    if [ "${INCLUDE_PLUGINS}" == "yes" ]; then
+        build_plugins
+    fi
+}
+
+# Function to package everything
+package() {
+    package_theme
+    if [ "${INCLUDE_PLUGINS}" == "yes" ]; then
+        package_plugins
+    fi
 }
 
 # Handle commands
-case $1 in
-    package) package_theme;;
+case "${1:-}" in
+    package) package;;
     help) help;;
-    "") build_theme;;
-    *) echo -e "Unknown command: $1"; help; exit 1;;
+    "") build;;
+    *) echo -e "${COLOR_RED}Unknown command: $1${COLOR_RESET}"; help; exit 1;;
 esac
