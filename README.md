@@ -45,9 +45,6 @@ The result will be available in the output directory created during the process.
 > [!TIP]
 > The `README.md` file in the `src/` folder will be added to your build. Customize it to your needs too.
 
-> [!IMPORTANT]
-> Keep _Opale_ up to date running `git pull origin <branch>` from the `src/opale/` folder.
-
 ### Favicon
 
 You can add a custom favicon simply by adding it in the `src/favicon/` folder. The file must be named `favicon.ico`.
@@ -77,30 +74,30 @@ In order to do that :
 ## Help
 
 ```
-Usage: ./build [OPTIONS] <COMMAND>
+usage: build [-n NAME] [-o OUTPUT] [-b BASE] [-v VERSION] [-p] [-h] [{package}]
 
-Options:
-  -b BASE      Opale base branch to use (default: master)
-  -n NAME      Package name (default: opale_customized)
-  -o DIRECTORY Output directory (default: dist/)
-  -p yes/no    Include plugins stylesheets (default: no)
-  -v VERSION   Package version (optional)
-  -h           Display this help message
+Custom Opale Redmine Theme Builder
 
-Commands:
-  package      Build and package the theme into a .tar.gz archive
-  help         Display this help message
+positional arguments:
+  {package}              build and package the theme in a .zip archive
 
-Examples:
-  ./build -b redmine-5.x -p yes
-  ./build -n my_theme -v 1.0.0 package
-  ./build -n custom_theme -o /var/www/redmine/themes
+options:
+  -n, --name NAME        name of the theme (default: opale_customized)
+  -o, --output OUTPUT    output directory where to build or package the theme (default: dist/)
+  -b, --base BASE        specific Opale base branch on which to build your theme
+  -v, --version VERSION  version to append to the name
+  -p, --plugins          build the theme along with the existing plugins stylesheets
+  -h, --help             show this help message and exit
 
-Notes:
-  - Options must be placed before the command
-  - Version is optional; if provided, it's appended to the package name
-  - All files and folders that start with the package name will be deleted from the output directory
-  - The script must be run from the project root directory
+examples:
+  Build the customized theme along with the plugins based on the "redmine-5.x" branch of Opale:
+  $ ./build -b redmine-5.x -p
+
+  Build and package the theme with the name "my_theme" and version "1.0.0":
+  $ ./build -n my_theme -v 1.0.0 package
+
+  Build the theme with the name "custom_theme" directly in Redmine's themes directory:
+  $ ./build -n custom_theme -o /var/www/redmine/themes
 ```
 
 ## Copying

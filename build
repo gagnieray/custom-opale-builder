@@ -1,394 +1,740 @@
-#!/bin/bash
-#
-# Copyright © 2026 Guillaume AGNIERAY
-#
-# This script is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This script is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU Affero General Public License for more details.
-#
-# You should have received a copy of the GNU Affero General Public License
-# along with this program. If not, see <https://www.gnu.org/licenses/>.
+#!/usr/bin/env python3
+"""
+Copyright © 2026 Guillaume AGNIERAY
 
-set -e
+This script is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-# Initialize variables with default values
-OPALE_BASE="master"
-INCLUDE_PLUGINS="no"
-PACKAGE_NAME="opale_customized"
-PACKAGE_VERSION=""
-OUTPUT_DIRECTORY="dist/"
+This script is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
 
-# Define color codes
-COLOR_RESET="\033[0m"
-COLOR_GREEN="\033[32m"
-COLOR_BLUE="\033[34m"
-COLOR_RED="\033[31m"
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+"""
 
-# Function to print help/usage instructions
-help() {
-    echo -e "${COLOR_GREEN}Usage:${COLOR_RESET} ./$(basename "$0") [OPTIONS] <COMMAND>\n"
+import argparse
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import zipfile
+from itertools import cycle
+from pathlib import Path
 
-    echo -e "${COLOR_GREEN}Options:${COLOR_RESET}"
-    echo -e "  -b BASE      Opale base branch to use (default: master)"
-    echo -e "  -n NAME      Package name (default: opale_customized)"
-    echo -e "  -o DIRECTORY Output directory (default: dist/)"
-    echo -e "  -p yes/no    Build plugins stylesheets (default: no)"
-    echo -e "  -v VERSION   Package version (optional)"
-    echo -e "  -h           Display this help message\n"
 
-    echo -e "${COLOR_GREEN}Commands:${COLOR_RESET}"
-    echo -e "  package      Build and package the theme into a .tar.gz archive"
-    echo -e "  help         Display this help message\n"
+class Colors:
+    """ANSI color codes for cross-platform terminal output."""
 
-    echo -e "${COLOR_GREEN}Examples:${COLOR_RESET}"
-    echo -e "  ./$(basename "$0") -b redmine-5.x -p yes"
-    echo -e "  ./$(basename "$0") -n my_theme -v 1.0.0 package"
-    echo -e "  ./$(basename "$0") -n custom_theme -o /var/www/redmine/themes\n"
+    RESET = "\033[0m"
+    GREEN = "\033[32m"
+    RED = "\033[31m"
 
-    echo -e "${COLOR_GREEN}Notes:${COLOR_RESET}"
-    echo -e "  - Options must be placed before the command"
-    echo -e "  - Version is optional; if provided, it's appended to the package name"
-    echo -e "  - All files and folders that start with the package name will be deleted from the output directory"
-    echo -e "  - The script must be run from the project root directory"
-}
 
-# Check for help flag early
-if [[ "$1" == "-h" || "$1" == "help" ]]; then
-    help
-    exit 0
-fi
+class OpaleBuildConfig:
+    """Configuration for the build process."""
 
-# Read options and corresponding values
-while getopts "b:n:o:p:v:h" option; do
-    case "$option" in
-        b) OPALE_BASE=${OPTARG};;
-        n) PACKAGE_NAME=${OPTARG};;
-        o) OUTPUT_DIRECTORY=${OPTARG};;
-        p) INCLUDE_PLUGINS=${OPTARG};;
-        v) PACKAGE_VERSION=${OPTARG};;
-        h) help; exit 0;;
-        *) help; exit 1;;
-    esac
-done
+    def __init__(
+        self,
+        opale_base: str | None = None,
+        package_name: str = "opale_customized",
+        package_version: str = "",
+        output_directory: str = "dist/",
+        include_plugins: bool = False,
+    ):
+        """Initialize configuration with provided or default values."""
+        self.opale_base = opale_base
+        self.package_name = package_name
+        self.package_version = package_version
+        self.output_directory = output_directory
+        self.include_plugins = include_plugins
 
-# Remove processed options from arguments
-shift $((OPTIND - 1))
+        self.project_root = Path(__file__).resolve().parent
+        self.abs_output_path = self._resolve_output_path()
+        self.full_package_name = self._build_full_package_name()
+        self.opale_initial_commit = None
 
-# Define packages names
-if [ -n "${PACKAGE_VERSION}" ]; then
-    FULL_PACKAGE_NAME="${PACKAGE_NAME}-${PACKAGE_VERSION}"
-else
-    FULL_PACKAGE_NAME="${PACKAGE_NAME}"
-fi
+    def _resolve_output_path(self) -> Path:
+        """Resolve the absolute output directory path."""
+        output_path = Path(self.output_directory)
 
-# Define absolute output path
-CURRENT_DIR=$(pwd)
-CURRENT_DIR="${CURRENT_DIR%/}/"
-if [ "${OUTPUT_DIRECTORY}" != "dist/" ] ; then
-    OUTPUT_DIRECTORY="${OUTPUT_DIRECTORY%/}/"
+        if output_path.is_absolute():
+            return output_path
 
-    if [[ "${OUTPUT_DIRECTORY}" == /* ]]; then
-        ABS_OUTPUT_PATH="${OUTPUT_DIRECTORY}"
-    elif [[ "${OUTPUT_DIRECTORY}" == ./* ]]; then
-        ABS_OUTPUT_PATH="${CURRENT_DIR}${OUTPUT_DIRECTORY:2}"
-    else
-        ABS_OUTPUT_PATH="${CURRENT_DIR}${OUTPUT_DIRECTORY}"
-    fi
-else
-    ABS_OUTPUT_PATH="${CURRENT_DIR}${OUTPUT_DIRECTORY}"
-fi
+        return self.project_root / output_path
 
-# Function to extract minimum Node.js version from Opale's workflow file
-get_minimum_node_version() {
-    local workflow_file=".github/workflows/lint.yml"
-    local min_version=""
+    def _build_full_package_name(self) -> str:
+        """Build the package directory name."""
+        if self.package_version:
+            return f"{self.package_name}-{self.package_version}"
 
-    cd src/opale 2>/dev/null || return
+        return self.package_name
 
-    min_version=$(git show "${OPALE_BASE}:${workflow_file}" 2>/dev/null | \
-        grep -oP 'node-version:\s*\[\s*\K[0-9]+' | head -1)
 
-    cd - > /dev/null
+class CommandRunner:
+    """Executes shell commands with error handling."""
 
-    echo "${min_version}"
-}
+    @staticmethod
+    def run(
+        command: list[str],
+        cwd: Path | str | None = None,
+    ) -> tuple[int, str, str]:
+        """Execute a command and return exit code, stdout, and stderr."""
+        try:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode, result.stdout, result.stderr
+        except FileNotFoundError as e:
+            return 1, "", str(e)
+        except Exception as e:
+            return 1, "", f"Command execution failed: {str(e)}"
 
-# Function to compare semantic versions (returns 0 if version >= min_version)
-version_gte() {
-    local version="$1"
-    local min_version="$2"
+    @staticmethod
+    def run_checked(
+        command: list[str],
+        cwd: Path | str | None = None,
+        error_msg: str = "",
+    ) -> None:
+        """Execute a command and exit on failure."""
+        exit_code, stdout, stderr = CommandRunner.run(command, cwd)
 
-    local major_version=$(echo "${version}" | grep -oP '^[0-9]+' | head -1)
+        if exit_code != 0:
+            print(f"{Colors.RED}✗{Colors.RESET} {error_msg or stderr}")
+            sys.exit(exit_code)
 
-    if [ -z "${major_version}" ] || [ -z "${min_version}" ]; then
-        return 0
-    fi
 
-    [ "${major_version}" -ge "${min_version}" ]
-}
+class SimpleSpinner:
+    """Simple spinner animation without external dependencies."""
 
-# Function to check requirements
-check_requirements() {
-    echo -e "\n${COLOR_BLUE}Checking Node.js version...${COLOR_RESET}"
-    if ! command -v node &> /dev/null; then
-        echo -e "${COLOR_RED}Install Node.js!${COLOR_RESET}"
-        exit 1
-    fi
-    local min_node_version=$(get_minimum_node_version)
-    local current_node_version=$(node -v | grep -oP 'v\K[0-9]+')
-    if ! version_gte "${current_node_version}" "${min_node_version}"; then
-        echo -e "${COLOR_RED}Update Node.js to the required minimum version (${min_node_version}.x)!${COLOR_RESET}"
-        exit 1
-    fi
+    def __init__(self, message: str = ""):
+        self.spinner_chars = cycle(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+        self.message = message
+        self.running = False
+        self.thread: threading.Thread | None = None
 
-    echo -e "${COLOR_BLUE}Checking git...${COLOR_RESET}"
-    if ! git -v > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}Install git!${COLOR_RESET}"
-        exit 1
-    fi
-}
+    def start(self) -> None:
+        """Start the spinner in a daemon thread."""
+        self.running = True
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+        self.thread.start()
 
-# Function to prepare opale submodule
-prepare_opale() {
-    echo -e "${COLOR_BLUE}Preparing Opale submodule...${COLOR_RESET}"
+    def stop(self) -> None:
+        """Stop the spinner and clear the output line."""
+        self.running = False
+        if self.thread:
+            self.thread.join()
+        # Clear the spinner line from the terminal
+        print("\r" + " " * 80 + "\r", end="", flush=True)
 
-    cd src/opale
+    def _spin(self) -> None:
+        """Display the spinner animation loop."""
+        while self.running:
+            print(f"\r{next(self.spinner_chars)} {self.message}", end="", flush=True)
+            time.sleep(0.1)
 
-    # Switch to the specified base branch if needed
-    if [ "${OPALE_BASE}" != "master" ]; then
-        echo -e "Switching to branch: ${OPALE_BASE}"
-        git switch "${OPALE_BASE}"
-        git pull
-    fi
 
-    # Copy custom variables
-    if [ -f "../_custom-variables.scss" ]; then
-        cp ../_custom-variables.scss src/sass
-    else
-        echo -e "${COLOR_RED}File 'src/_custom-variables.scss' could not be found!${COLOR_RESET}"
-        exit 1
-    fi
+def get_minimum_node_version(config: OpaleBuildConfig) -> str:
+    """Extract the minimum Node.js version from Opale's workflow file."""
 
-    # Add _custom-variables.scss to application.scss
-    if ! head -1 src/sass/application.scss | grep -q '^@use "custom-variables";'; then
-        echo -e "Info: adding @use rule at the top of 'opale/src/sass/application.scss'"
-        { echo '@use "custom-variables";'; cat src/sass/application.scss; } > temp && mv temp src/sass/application.scss
-    else
-        echo -e "Info: @use rule already at the top of 'opale/src/sass/application.scss'"
-    fi
+    workflow_file = ".github/workflows/lint.yml"
+    opale_src_path = config.project_root / "src" / "opale"
 
-    npm install --silent
-    cd - > /dev/null
-}
+    try:
+        command = ["git", "show", f"{config.opale_base}:{workflow_file}"]
+        exit_code, stdout, stderr = CommandRunner.run(
+            command,
+            cwd=opale_src_path,
+        )
 
-# Function to restore opale submodule to default state
-restore_opale() {
-    echo -e "${COLOR_BLUE}Restoring Opale submodule to default state...${COLOR_RESET}"
+        if exit_code != 0:
+            return ""
 
-    cd src/opale
-    git restore .
+        match = re.search(r"node-version:\s*\[\s*(\d+)", stdout)
+        return match.group(1) if match else ""
 
-    if [ "${OPALE_BASE}" != "master" ]; then
-        git switch master
-    fi
+    except Exception:
+        return ""
 
-    rm -f src/sass/_custom-variables.scss
-    rm -rf node_modules
-    rm -rf plugins
-    cd - > /dev/null
-}
 
-# Function to get all available plugins dynamically
-get_available_plugins() {
-    local plugins_dir="src/opale/plugins"
-    local plugins=()
+def version_gte(version: str, min_version: str) -> bool:
+    """Compare semantic versions (returns True if version >= min_version)."""
 
-    if [ ! -d "${plugins_dir}" ]; then
+    if not version or not min_version:
+        return True
+
+    try:
+        return int(version.split(".")[0]) >= int(min_version.split(".")[0])
+    except (ValueError, IndexError):
+        return True
+
+
+def check_requirements(config: OpaleBuildConfig) -> None:
+    """Verify all required tools and report every missing requirement."""
+
+    successes = []
+    errors = []
+
+    print("Checking minimum requirements:")
+
+    # Check Node.js installation and version
+    exit_code, stdout, stderr = CommandRunner.run(["node", "--version"])
+
+    if exit_code != 0:
+        errors.append("Node.js is not installed or is not available")
+    else:
+        node_version_match = re.search(r"v(\d+)", stdout)
+
+        if not node_version_match:
+            errors.append("Could not determine the Node.js version")
+        else:
+            current_node_version = node_version_match.group(1)
+            min_node_version = get_minimum_node_version(config)
+
+            if min_node_version and not version_gte(current_node_version, min_node_version):
+                errors.append(
+                    f"Node.js version is too old: {min_node_version}.x or newer is required"
+                )
+            else:
+                successes.append("Node.js")
+
+    # Check Npm installation
+    exit_code, _, _ = CommandRunner.run(["npm", "--version"])
+
+    if exit_code != 0:
+        errors.append("Npm is not installed or is not available")
+    else:
+        successes.append("Npm")
+
+    # Check Git installation
+    exit_code, _, _ = CommandRunner.run(["git", "--version"])
+
+    if exit_code != 0:
+        errors.append("Git is not installed or is not available")
+    else:
+        successes.append("Git")
+
+    if successes:
+        for success in successes:
+            print(f"{Colors.GREEN}✓{Colors.RESET} {success}")
+
+    if errors:
+        print(
+            f"{Colors.RED}✗{Colors.RESET} The following requirements are missing or invalid:"
+        )
+
+        for error in errors:
+            print(f"- {error}")
+
+        sys.exit(1)
+
+
+def scss_import(opale_path: Path, spinner: SimpleSpinner | None = None) -> None:
+    """Ensure '@use "custom-variables";' is present on the first line of application.scss."""
+
+    app_scss = opale_path / "src" / "sass" / "application.scss"
+
+    # Read current content
+    with open(app_scss, encoding="utf-8") as f:
+        content = f.read()
+
+    # Check if the first line already contains the import
+    first_line = content.split("\n")[0] if content else ""
+    if '@use "custom-variables"' in first_line:
         return
-    fi
 
-    while IFS= read -r -d '' plugin_dir; do
-        local plugin_name=$(basename "${plugin_dir}")
-        plugins+=("${plugin_name}")
-    done < <(find "${plugins_dir}" -maxdepth 1 -type d ! -name 'plugins' -print0)
+    # Prepare new content: add import on first line
+    new_content = '@use "custom-variables";\n' + content
 
-    printf '%s\n' "${plugins[@]}"
-}
+    # Write atomically: temp file + rename
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=app_scss.parent,
+            delete=False,
+            suffix=".scss",
+        ) as temp_file:
+            temp_file.write(new_content)
+            temp_path = Path(temp_file.name)
 
-# Function to build theme
-build_theme() {
-    check_requirements
-    echo -e "${COLOR_BLUE}Building customized theme based on Opale...${COLOR_RESET}"
+        temp_path.replace(app_scss)
+    except Exception as e:
+        if spinner:
+            spinner.stop()
+        # Clean up temp file if something went wrong
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
+        raise RuntimeError(
+            f"{Colors.RED}✗{Colors.RESET} Failed to update {app_scss}: {str(e)}"
+        ) from e
 
-    rm -rf "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"*
-    mkdir -p "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
 
-    prepare_opale
-    cd src/opale
-    npm run lint
+def prepare_opale(config: OpaleBuildConfig, spinner: SimpleSpinner | None = None) -> None:
+    """Prepare the Opale submodule for building."""
 
-    if [ "${OPALE_BASE}" == "redmine-5.x" ]; then
-        npm run build
-    else
-        npm run build:theme
-    fi
+    opale_path = config.project_root / "src" / "opale"
 
-    cd - > /dev/null
+    if config.opale_base:
+        CommandRunner.run_checked(
+            ["git", "checkout", config.opale_base],
+            cwd=opale_path,
+        )
 
-    # Copy built assets to output directory
-    copy_theme_assets
+    # Copy custom variables file
+    custom_vars_src = config.project_root / "src" / "_custom-variables.scss"
+    custom_vars_dst = opale_path / "src" / "sass" / "_custom-variables.scss"
 
-    restore_opale
+    if custom_vars_src.exists():
+        shutil.copy2(custom_vars_src, custom_vars_dst)
+    else:
+        if spinner:
+            spinner.stop()
 
-    echo -e "${COLOR_GREEN}Customized theme built successfully in '${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}'!${COLOR_RESET}"
-}
+        print(
+            f"{Colors.RED}✗{Colors.RESET} File 'src/_custom-variables.scss' could not be found"
+        )
+        raise SystemExit(1)
 
-# Function to build plugins
-build_plugins() {
-    local skip_restore="${1:-false}"
+    # Update application.scss with custom variables import
+    scss_import(opale_path, spinner)
 
-    check_requirements
-    echo -e "${COLOR_BLUE}Building customized plugins based on Opale...${COLOR_RESET}"
+    CommandRunner.run_checked(
+        ["npm", "ci", "--silent"],
+        cwd=opale_path,
+    )
 
-    prepare_opale
-    cd src/opale
-    npm run lint
 
-    if [ "${OPALE_BASE}" == "redmine-5.x" ]; then
-        npm run build
-    else
-        npm run build:plugins
-    fi
+def restore_opale(config: OpaleBuildConfig) -> None:
+    """Restore the Opale submodule to its default state."""
 
-    cd - > /dev/null
+    opale_path = config.project_root / "src" / "opale"
 
-    local available_plugins=($(get_available_plugins))
+    # Reset tracked files to their original state
+    CommandRunner.run_checked(
+        ["git", "reset", "--hard"],
+        cwd=opale_path,
+    )
 
-    if [ ${#available_plugins[@]} -eq 0 ]; then
-        echo -e "${COLOR_RED}No plugins found in src/opale/plugins!${COLOR_RESET}"
-        return 1
-    fi
+    # Remove untracked files, directories, and ignored files
+    CommandRunner.run_checked(
+        ["git", "clean", "-fdx"],
+        cwd=opale_path,
+    )
 
-    # Copy built plugins to output directory
-    for plugin_name in "${available_plugins[@]}"; do
-        copy_plugin_assets "${plugin_name}"
-    done
+    # Restore the submodule to the commit pinned by the superproject
+    CommandRunner.run_checked(
+        ["git", "submodule", "update", "--init", "src/opale"],
+        cwd=config.project_root,
+    )
 
-    # Restore only if not skipping (i.e., when called without "package")
-    if [ "${skip_restore}" = "false" ]; then
-        restore_opale
-    fi
 
-    echo -e "${COLOR_GREEN}Customized plugins built successfully!${COLOR_RESET}"
-}
+def get_available_plugins(config: OpaleBuildConfig) -> list[str]:
+    """Retrieve all available plugins from the Opale plugins directory."""
 
-# Function to copy theme assets
-copy_theme_assets() {
-    if [ -d "src/favicon" ]; then
-        cp -r src/favicon "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    fi
-    if [ -d "src/images" ]; then
-        cp -r src/images "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    fi
-    if [ -d "src/opale/javascripts" ]; then
-        cp -r src/opale/javascripts "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    fi
-    cp -r src/opale/webfonts src/opale/stylesheets "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    if [ -d "src/webfonts" ]; then
-        cp src/webfonts/* "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"/webfonts
-    fi
-    if [ -f "src/README.md" ]; then
-        cp src/README.md "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-    fi
-    cp LICENSE "${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}"
-}
+    plugins_dir = config.project_root / "src" / "opale" / "plugins"
 
-# Function to copy a single plugin assets
-copy_plugin_assets() {
-    local plugin_name="$1"
-    local plugin_output_dir="${ABS_OUTPUT_PATH}${PACKAGE_NAME}-${plugin_name}"
+    if not plugins_dir.exists():
+        return []
 
-    if [ -n "${PACKAGE_VERSION}" ]; then
-        plugin_output_dir="${ABS_OUTPUT_PATH}${PACKAGE_NAME}-${plugin_name}-${PACKAGE_VERSION}"
-    fi
+    return sorted(d.name for d in plugins_dir.iterdir() if d.is_dir() and d.name != "plugins")
 
-    # Clean up previous builds
-    rm -rf "${plugin_output_dir}"*
-    mkdir -p "${plugin_output_dir}"
 
-    # Copy plugin assets
-    if [ -d "src/opale/plugins/${plugin_name}" ]; then
-        cp -r src/opale/plugins/"${plugin_name}"/* "${plugin_output_dir}"
-    fi
+def copy_theme_assets(config: OpaleBuildConfig) -> None:
+    """Copy theme assets from source directories to the output directory."""
 
-    # Copy license
-    cp LICENSE "${plugin_output_dir}"
-}
+    output_path = config.abs_output_path / config.full_package_name
 
-# Function to package theme
-package_theme() {
-    build_theme
-    echo -e "${COLOR_BLUE}Packaging customized theme...${COLOR_RESET}"
-    cd "${ABS_OUTPUT_PATH}"
-    tar cvfz "${FULL_PACKAGE_NAME}".tar.gz "${FULL_PACKAGE_NAME}"
-    rm -rf "${FULL_PACKAGE_NAME}"
-    cd "${CURRENT_DIR}"
-    echo -e "${COLOR_GREEN}Customized theme packaged successfully: '${ABS_OUTPUT_PATH}${FULL_PACKAGE_NAME}.tar.gz'!${COLOR_RESET}"
-}
+    assets = [
+        ("src/favicon", "favicon"),
+        ("src/images", "images"),
+        ("src/opale/javascripts", "javascripts"),
+        ("src/opale/webfonts", "webfonts"),
+        ("src/opale/stylesheets", "stylesheets"),
+    ]
 
-# Function to package plugins
-package_plugins() {
-    build_plugins "true" || return 1
-    echo -e "${COLOR_BLUE}Packaging customized plugins...${COLOR_RESET}"
+    for src, dst in assets:
+        src_path = config.project_root / src
 
-    local available_plugins=($(get_available_plugins))
+        if src_path.exists():
+            shutil.copytree(
+                src_path,
+                output_path / dst,
+                dirs_exist_ok=True,
+            )
 
-    for plugin_name in "${available_plugins[@]}"; do
-        local plugin_package_name="${PACKAGE_NAME}-${plugin_name}"
-        if [ -n "${PACKAGE_VERSION}" ]; then
-            plugin_package_name="${PACKAGE_NAME}-${plugin_name}-${PACKAGE_VERSION}"
-        fi
+    src_webfonts = config.project_root / "src" / "webfonts"
 
-        if [ -d "${ABS_OUTPUT_PATH}${plugin_package_name}" ]; then
-            cd "${ABS_OUTPUT_PATH}"
-            tar cvfz "${plugin_package_name}".tar.gz "${plugin_package_name}"
-            rm -rf "${plugin_package_name}"
-            cd "${CURRENT_DIR}"
-            echo -e "${COLOR_GREEN}Plugin '${plugin_name}' packaged: '${ABS_OUTPUT_PATH}${plugin_package_name}.tar.gz'${COLOR_RESET}"
-        else
-            echo -e "${COLOR_RED}WARNING: Directory not found: ${ABS_OUTPUT_PATH}${plugin_package_name}${COLOR_RESET}"
-        fi
-    done
+    if src_webfonts.exists():
+        dst_webfonts = output_path / "webfonts"
+        dst_webfonts.mkdir(parents=True, exist_ok=True)
 
-    restore_opale
-}
+        for file_path in src_webfonts.iterdir():
+            if file_path.is_file():
+                shutil.copy2(file_path, dst_webfonts)
 
-# Function to build everything
-build() {
-    build_theme
-    if [ "${INCLUDE_PLUGINS}" == "yes" ]; then
-        build_plugins
-    fi
-}
+    readme = config.project_root / "src" / "README.md"
 
-# Function to package everything
-package() {
-    package_theme
-    if [ "${INCLUDE_PLUGINS}" == "yes" ]; then
-        package_plugins
-    fi
-}
+    if readme.exists():
+        shutil.copy2(readme, output_path)
 
-# Handle commands
-case "${1:-}" in
-    package) package;;
-    help) help;;
-    "") build;;
-    *) echo -e "${COLOR_RED}Unknown command: $1${COLOR_RESET}"; help; exit 1;;
-esac
+    license_file = config.project_root / "LICENSE"
+
+    if license_file.exists():
+        shutil.copy2(license_file, output_path)
+
+
+def copy_plugin_assets(
+    config: OpaleBuildConfig,
+    plugin_name: str,
+) -> None:
+    """Copy a single plugin's assets to the output directory."""
+
+    suffix = f"-{config.package_version}" if config.package_version else ""
+
+    plugin_out = config.abs_output_path / f"{config.package_name}-{plugin_name}{suffix}"
+
+    if plugin_out.exists():
+        shutil.rmtree(plugin_out)
+
+    plugin_out.mkdir(parents=True, exist_ok=True)
+
+    plugin_src = config.project_root / "src" / "opale" / "plugins" / plugin_name
+
+    if plugin_src.exists():
+        for item in plugin_src.iterdir():
+            if item.is_dir():
+                shutil.copytree(
+                    item,
+                    plugin_out / item.name,
+                    dirs_exist_ok=True,
+                )
+            else:
+                shutil.copy2(item, plugin_out)
+
+    license_file = config.project_root / "LICENSE"
+
+    if license_file.exists():
+        shutil.copy2(license_file, plugin_out)
+
+
+def build_theme(
+    config: OpaleBuildConfig, show_success: bool = True, spinner: SimpleSpinner | None = None
+) -> None:
+    """Build the customized theme based on Opale."""
+
+    if show_success:
+        print("Building the customized theme based on Opale:")
+
+        spinner = SimpleSpinner()
+        spinner.start()
+
+    try:
+        output_path = config.abs_output_path / config.full_package_name
+
+        if output_path.exists():
+            shutil.rmtree(output_path)
+
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        prepare_opale(config, spinner)
+
+        opale_path = config.project_root / "src" / "opale"
+        CommandRunner.run_checked(
+            ["npm", "run", "lint"],
+            cwd=opale_path,
+        )
+
+        # Select build command based on Opale base version
+        build_cmd = "build" if config.opale_base == "redmine-5.x" else "build:theme"
+
+        CommandRunner.run_checked(
+            ["npm", "run", build_cmd],
+            cwd=opale_path,
+        )
+
+        copy_theme_assets(config)
+        restore_opale(config)
+
+    finally:
+        if show_success:
+            if spinner:
+                spinner.stop()
+
+            print(f"{Colors.GREEN}✓{Colors.RESET} Customized theme built in '{output_path}'")
+
+
+def build_plugins(
+    config: OpaleBuildConfig,
+    skip_restore: bool = False,
+    show_success: bool = True,
+) -> bool:
+    """Build the customized plugins based on Opale."""
+
+    spinner = None
+    if show_success:
+        print("Building the customized plugins based on Opale:")
+        spinner = SimpleSpinner()
+        spinner.start()
+
+    try:
+        prepare_opale(config, spinner)
+
+        opale_path = config.project_root / "src" / "opale"
+        CommandRunner.run_checked(
+            ["npm", "run", "lint"],
+            cwd=opale_path,
+        )
+
+        # Select build command based on Opale base version
+        build_cmd = "build" if config.opale_base == "redmine-5.x" else "build:plugins"
+
+        CommandRunner.run_checked(
+            ["npm", "run", build_cmd],
+            cwd=opale_path,
+        )
+
+        available = get_available_plugins(config)
+
+        if not available:
+            if spinner:
+                spinner.stop()
+
+            print(f"{Colors.RED}✗{Colors.RESET} No plugins found in src/opale/plugins")
+            return False
+
+        for plugin in available:
+            copy_plugin_assets(config, plugin)
+
+        if spinner:
+            spinner.stop()
+            for plugin in available:
+                build_path = config.abs_output_path / plugin
+                print(
+                    f"{Colors.GREEN}✓{Colors.RESET} "
+                    f"Customized plugin '{plugin}' built in '{build_path}'"
+                )
+
+        if not skip_restore:
+            restore_opale(config)
+
+    except SystemExit:
+        if spinner:
+            spinner.stop()
+        raise
+
+    return True
+
+
+def package_theme(config: OpaleBuildConfig) -> None:
+    """Build and package the theme into a .zip archive."""
+
+    print("Packaging the customized theme:")
+
+    spinner = SimpleSpinner()
+    spinner.start()
+
+    try:
+        build_theme(config, show_success=False, spinner=spinner)
+
+        archive_name = f"{config.full_package_name}.zip"
+        archive_path = config.abs_output_path / archive_name
+        theme_dir = config.abs_output_path / config.full_package_name
+
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _dirs, files in __import__("os").walk(theme_dir):
+                for file in files:
+                    file_path = Path(root) / file
+                    arcname = file_path.relative_to(config.abs_output_path)
+                    zf.write(file_path, arcname)
+
+        shutil.rmtree(theme_dir)
+
+        if spinner:
+            spinner.stop()
+
+        print(f"{Colors.GREEN}✓{Colors.RESET} Customized theme packaged in '{archive_path}'")
+
+    except SystemExit:
+        if spinner:
+            spinner.stop()
+        raise
+
+
+def package_plugins(config: OpaleBuildConfig) -> None:
+    """Build and package the customized plugins into .zip archives."""
+
+    print("Packaging the customized plugins:")
+
+    spinner = SimpleSpinner()
+    spinner.start()
+
+    try:
+        if not build_plugins(config, skip_restore=True, show_success=False):
+            if spinner:
+                spinner.stop()
+            return
+
+        if spinner:
+            spinner.stop()
+
+        available = get_available_plugins(config)
+
+        for plugin in available:
+            suffix = f"-{config.package_version}" if config.package_version else ""
+            pkg_name = f"{config.package_name}-{plugin}{suffix}"
+            pkg_dir = config.abs_output_path / pkg_name
+
+            if pkg_dir.exists():
+                archive_path = config.abs_output_path / f"{pkg_name}.zip"
+
+                spinner.start()
+                try:
+                    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for root, _dirs, files in __import__("os").walk(pkg_dir):
+                            for file in files:
+                                file_path = Path(root) / file
+                                arcname = file_path.relative_to(config.abs_output_path)
+                                zf.write(file_path, arcname)
+
+                    shutil.rmtree(pkg_dir)
+                finally:
+                    if spinner:
+                        spinner.stop()
+
+                    print(
+                        f"{Colors.GREEN}✓{Colors.RESET} "
+                        f"Customized plugin '{plugin}' packaged in '{archive_path}'"
+                    )
+            else:
+                print(f"{Colors.RED}✗{Colors.RESET} Directory not found: '{pkg_dir}'")
+
+        restore_opale(config)
+
+    except SystemExit:
+        if spinner:
+            spinner.stop()
+        raise
+
+
+def main() -> None:
+    """Main entry point: build or package the customized Opale theme and plugins."""
+
+    # Enforce Python 3.10+ for union type syntax (|).
+    # This check is intentionally kept to provide a clear error message when
+    # the script is launched with an unsupported Python version.
+    if sys.version_info < (3, 10):  # noqa: UP036
+        print(
+            f"{Colors.RED}✗{Colors.RESET} "
+            "This script requires Python 3.10 or later. "
+            f"You are using Python {sys.version_info.major}.{sys.version_info.minor}."
+        )
+        raise SystemExit(1)
+
+    parser = argparse.ArgumentParser(
+        description="Custom Opale Redmine Theme Builder",
+        formatter_class=lambda prog: argparse.RawDescriptionHelpFormatter(
+            prog,
+            max_help_position=25,
+        ),
+        add_help=False,
+        epilog="""
+examples:
+  Build the customized theme along with the plugins based on the "redmine-5.x" branch of Opale:
+  $ ./%(prog)s -b redmine-5.x -p
+
+  Build and package the theme with the name "my_theme" and version "1.0.0":
+  $ ./%(prog)s -n my_theme -v 1.0.0 package
+
+  Build the theme with the name "custom_theme" directly in Redmine's themes directory:
+  $ ./%(prog)s -n custom_theme -o /var/www/redmine/themes
+""",
+    )
+
+    # Define command-line options
+    parser.add_argument(
+        "-n",
+        "--name",
+        default="opale_customized",
+        help="name of the theme (default: opale_customized)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default="dist/",
+        help="output directory where to build or package the theme (default: dist/)",
+    )
+    parser.add_argument(
+        "-b",
+        "--base",
+        default=None,
+        help="specific Opale base branch on which to build your theme",
+    )
+    parser.add_argument(
+        "-v",
+        "--version",
+        default="",
+        help="version to append to the name",
+    )
+    parser.add_argument(
+        "-p",
+        "--plugins",
+        action="store_true",
+        help="build the theme along with the existing plugins stylesheets",
+    )
+    parser.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        help="show this help message and exit",
+    )
+
+    # Define the optional positional command argument
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["package"],
+        default=None,
+        help="build and package the theme in a .zip archive",
+    )
+
+    args = parser.parse_args()
+
+    # Initialize build configuration from parsed arguments
+    config = OpaleBuildConfig(
+        opale_base=args.base,
+        package_name=args.name,
+        package_version=args.version,
+        output_directory=args.output,
+        include_plugins=args.plugins,
+    )
+
+    # Verify all required tools are installed and accessible
+    check_requirements(config)
+
+    # Execute the requested command or default action
+    if args.command == "package":
+        package_theme(config)
+
+        if config.include_plugins:
+            package_plugins(config)
+    else:
+        # Default action: build without packaging
+        build_theme(config)
+
+        if config.include_plugins:
+            build_plugins(config)
+
+
+if __name__ == "__main__":
+    main()
