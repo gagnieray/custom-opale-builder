@@ -1,0 +1,47 @@
+name: Python code quality
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "build"
+      - "pyproject.toml"
+      - ".github/workflows/lint-python.yml"
+  pull_request:
+    paths:
+      - "build"
+      - "pyproject.toml"
+      - ".github/workflows/lint-python.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and type-check Python
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff mypy
+
+      - name: Check formatting with Ruff
+        run: ruff format --check build
+
+      - name: Check linting with Ruff
+        run: ruff check build
+
+      - name: Check types with Mypy
+        run: mypy --strict build
